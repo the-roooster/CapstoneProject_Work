@@ -2,6 +2,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.auth import router as auth_router
+from app.api.v1.router import router as protected_router
 from app.config import settings
 
 app = FastAPI()
@@ -22,4 +23,5 @@ def health() -> dict[str, str]:
 
 
 router.include_router(auth_router)
+router.include_router(protected_router)
 app.include_router(router, prefix="/api/v1")
