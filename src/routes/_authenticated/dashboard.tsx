@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Panel, RiskBadge, riskColor } from "@/components/sentinel";
 import { scoresQuery, eventTrendQuery } from "@/lib/queries";
 import { runScoring } from "@/lib/scoring.functions";
+import { topRiskyUsers } from "@/lib/top-users";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
   head: () => ({
@@ -50,8 +51,7 @@ function Dashboard() {
   const open = rows.filter((r) => r.risk_level !== "Low" && r.status === "open");
   const count = (l: string) => open.filter((r) => r.risk_level === l).length;
   const dist = ["Low", "Medium", "High"].map((l) => ({ level: l, count: rows.filter((r) => r.risk_level === l).length }));
-  const topUsers = [...new Map(rows.map((r) => [r.employee_id, r])).values()]
-    .sort((a, b) => b.risk_score - a.risk_score).slice(0, 6);
+  const topUsers = topRiskyUsers(rows, 6);
 
   return (
     <div className="space-y-6">
