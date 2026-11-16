@@ -6,6 +6,28 @@ SentinelAI is an insider-threat monitoring application for ingesting activity, s
 
 Use Python 3.11+, Node.js/npm and a disposable PostgreSQL database. Copy `.env.example` to `backend/.env` and to `.env` at the repository root. In the backend copy set `DATABASE_URL` (using a SQLAlchemy PostgreSQL/psycopg URL), a `JWT_SECRET` of at least 32 characters, `DEMO_EMAIL`, `DEMO_PASSWORD`, and `CORS_ORIGINS` to the frontend's actual origin. In the root copy set `VITE_API_URL` to the backend API URL, for example `http://localhost:8000/api/v1`. LLM settings are optional; the summary falls back to a template.
 
+## Run with Docker
+
+Install Docker Engine with Compose. Copy `.env.example` to `.env` at the repository root and set:
+
+- `POSTGRES_PASSWORD` to a nonempty URL-safe password (letters and digits work); optionally set URL-safe `POSTGRES_USER` and `POSTGRES_DB` (both default to `sentinel`).
+- `JWT_SECRET` to at least 32 characters, plus `DEMO_EMAIL` and `DEMO_PASSWORD` if you plan to seed.
+- `CORS_ORIGINS=http://localhost:5173` and `VITE_API_URL=http://localhost:8000/api/v1` for local browser access. Set the browser-accessible URLs instead when using another host.
+
+Compose builds the PostgreSQL 16, backend and frontend services. It constructs the backend's `DATABASE_URL` from the PostgreSQL settings using the internal `postgres` hostname, overriding any `DATABASE_URL` in `.env`. The backend applies Alembic migrations after PostgreSQL is healthy; the frontend runs the Vite development server.
+
+```sh
+docker compose up --build
+```
+
+Open `http://localhost:5173`; the API is at `http://localhost:8000/api/v1`. To load the demo, in another terminal run:
+
+```sh
+docker compose exec backend python -m scripts.seed_demo --yes
+```
+
+**The seed command resets the Compose database and deletes its existing application data.** PostgreSQL data, model files and generated synthetic data use named volumes, which persist across `docker compose down`. This setup is for local development and does not provide TLS termination.
+
 ## Backend setup
 
 From the repository root:
