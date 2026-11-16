@@ -26,13 +26,17 @@ def _finish(job_id, status, report):
         JOBS[job_id] = {"status": status, "report": report}
 
 
-def _ingest_job(job_id, directory, cleanup):
+def _ingest_job(job_id, directory, cleanup, mode="synthetic"):
     try:
-        from app.ingest.ingest import load_events_csv, load_users_csv
+        from app.ingest.ingest import load_cert, load_events_csv, load_users_csv
         with SessionLocal() as db:
-            users = load_users_csv(db, Path(directory) / "users.csv")
-            events = load_events_csv(db, Path(directory) / "events.csv")
-        _finish(job_id, "done", {"users": asdict(users), "events": asdict(events)})
+            if mode == "cert":
+                report = {"events": asdict(load_cert(db, Path(directory)))}
+            else:
+                users = load_users_csv(db, Path(directory) / "users.csv")
+                events = load_events_csv(db, Path(directory) / "events.csv")
+                report = {"users": asdict(users), "events": asdict(events)}
+        _finish(job_id, "done", report)
     except Exception as exc:
         _finish(job_id, "error", {"error": str(exc)})
     finally:
@@ -65,6 +69,7 @@ def _score_job(job_id, retrain):
 @router.post("/ingest/run", response_model=JobCreated)
 def run_ingest(background: BackgroundTasks, source: str | None = Query(None),
                files: list[UploadFile] | None = File(None)):
+    mode = "synthetic"
     if source == "synthetic":
         if files:
             raise HTTPException(422, "Choose synthetic source or files, not both")
@@ -74,8 +79,16 @@ def run_ingest(background: BackgroundTasks, source: str | None = Query(None),
             raise HTTPException(404, "Synthetic CSV files not found")
         cleanup = False
     elif source is None:
-        if not files or sorted(file.filename for file in files) != ["events.csv", "users.csv"]:
-            raise HTTPException(422, "Upload users.csv and events.csv")
+        names = [file.filename for file in (files or [])]
+        cert_names = {"logon.csv", "device.csv", "file.csv"}
+        if not names or len(names) != len(set(names)):
+            raise HTTPException(422, "Upload distinct CERT CSV files or users.csv and events.csv")
+        if set(names) == {"events.csv", "users.csv"}:
+            mode = "synthetic"
+        elif set(names) <= cert_names:
+            mode = "cert"
+        else:
+            raise HTTPException(422, "Upload logon.csv, device.csv and/or file.csv")
         directory = Path(tempfile.mkdtemp(prefix="sentinel-ingest-"))
         try:
             for file in files:
@@ -88,7 +101,7 @@ def run_ingest(background: BackgroundTasks, source: str | None = Query(None),
     else:
         raise HTTPException(422, "Unknown ingest source")
     job_id = _new_job()
-    background.add_task(_ingest_job, job_id, str(directory), cleanup)
+    background.add_task(_ingest_job, job_id, str(directory), cleanup, mode)
     return {"job_id": job_id}
 
 
