@@ -48,3 +48,18 @@ Synthetic caveat: results describe seeded scenarios and do not establish perform
 ```
 
 Precision is measured over the available rows in each top-k set. Recall@top5% is the fraction of all labelled positive test user-days in the highest-ranked 5% of test user-days (rounded up). Insider counts are distinct labelled users found in each top-k set. The grid's recall uses all Medium and High alerts. Combined ranking averages percentile ranks of model and rule scores; it is for comparison only.
+
+## Isolation Forest and LOF comparison — synthetic only
+
+Both runs use seed 42, the same 440 training and 200 test user-days, and the same three labelled positive test user-days. Commands: `python -m scripts.evaluate --model iforest` and `python -m scripts.evaluate --model lof`. As in the captured run above, a temporary settings stub supplied the timezone and USB lookback because `pydantic-settings` was unavailable; actual model and rule calculations used the existing implementation.
+
+| Model | Ranking | P@10 | P@50 | Recall@top5% | Insiders@10 | Insiders@50 |
+|---|---|---:|---:|---:|---:|---:|
+| Isolation Forest | Model only | 0.300 | 0.060 | 1.000 (top 10) | 3 | 3 |
+| Isolation Forest | Rules only | 0.300 | 0.060 | 1.000 (top 10) | 3 | 3 |
+| Isolation Forest | Combined (evaluation only) | 0.300 | 0.060 | 1.000 (top 10) | 3 | 3 |
+| LOF | Model only | 0.300 | 0.060 | 1.000 (top 10) | 3 | 3 |
+| LOF | Rules only | 0.300 | 0.060 | 1.000 (top 10) | 3 | 3 |
+| LOF | Combined (evaluation only) | 0.300 | 0.060 | 1.000 (top 10) | 3 | 3 |
+
+At their respective suggested 99.9/99 percentile settings, the EMP004 negative control was Medium for Isolation Forest and High for LOF. LOF is distance-based and these runs do not scale features; its novelty scores for training rows are also used to calibrate percentiles. The three synthetic positives are insufficient to establish comparative real-world performance; combined ranking remains evaluation-only.
