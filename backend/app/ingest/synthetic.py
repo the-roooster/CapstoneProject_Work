@@ -6,6 +6,8 @@ import random
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
+from app.ingest.activities import ACTIVITY_TYPES
+
 TZ = timezone(timedelta(hours=5, minutes=30))
 DEFAULT_ANCHOR = date(2026, 11, 2)
 
@@ -60,9 +62,7 @@ def generate_synthetic(out: str | Path, seed: int = 42,
     def add(user, day, hour, minute, activity, metadata=None, *, second=0, device=None,
             ip=None, location=None, scenario=None):
         number = int(user["user_id"][3:])
-        typ = ("login" if activity in ("login", "login_failed", "logout")
-               else "file" if activity.startswith("file_")
-               else "usb" if activity.startswith("usb_") else "device")
+        typ = ACTIVITY_TYPES[activity]
         row = {"user_id": user["user_id"],
                "timestamp": datetime.combine(day, time(hour, minute, second), TZ).isoformat(),
                "activity_type": typ, "activity": activity,
