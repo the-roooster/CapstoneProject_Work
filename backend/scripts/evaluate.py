@@ -1,6 +1,6 @@
 """Evaluate CERT or synthetic data in an isolated in-memory SQLite database.
 
-From backend/: python -m scripts.evaluate [--cert-dir PATH] [--answers PATH]
+From backend/: python -m scripts.evaluate [--cert-dir PATH] [--answers PATH] [--model iforest|lof]
 No production tables or saved models are changed. Answer CSVs must identify a
 user and either a start/end interval or dated insider events.
 """
@@ -34,6 +34,7 @@ from app.ingest.ingest import load_cert, load_events_csv, load_users_csv
 from app.ingest.synthetic import generate_synthetic
 from app.ml.calibration import Calibration
 from app.ml.iforest import IsolationForestModel
+from app.ml.lof import LocalOutlierFactorModel
 from app.models import Base, Event, Feature, SCHEMA, User
 
 SEED = 42
@@ -177,7 +178,9 @@ def _format_recall(value):
     return f"{value:.3f}" if value is not None else "N/A (no labelled positive test user-days)"
 
 
-def evaluate(cert_dir=None, answer_path=None):
+def evaluate(cert_dir=None, answer_path=None, model_name="iforest"):
+    if model_name not in ("iforest", "lof"):
+        raise ValueError(f"Unknown model: {model_name}")
     output = []
     emit = output.append
     with tempfile.TemporaryDirectory(prefix="sentinel-evaluation-") as scratch:
@@ -238,7 +241,7 @@ def evaluate(cert_dir=None, answer_path=None):
                 test = [f for f in feature_rows if f.date >= cutoff]
                 train_x = pd.DataFrame([{name: getattr(f, name) for name in FEATURE_COLUMNS} for f in train], columns=FEATURE_COLUMNS)
                 test_x = pd.DataFrame([{name: getattr(f, name) for name in FEATURE_COLUMNS} for f in test], columns=FEATURE_COLUMNS)
-                model = IsolationForestModel().fit(train_x)
+                model = (IsolationForestModel() if model_name == "iforest" else LocalOutlierFactorModel()).fit(train_x)
                 training_scores = model.score(train_x)
                 scores = model.score(test_x)
                 history = defaultdict(list)
@@ -271,6 +274,7 @@ def evaluate(cert_dir=None, answer_path=None):
             engine.dispose()
 
     emit(f"Dataset: {mode}; seed={SEED}; timezone={settings.APP_TZ}; sample={selected}/{population} users (all labelled insiders plus up to 200 others).")
+    emit(f"Model: {model_name}.")
     if mode == "synthetic":
         emit(f"Synthetic: anchor={ANCHOR.isoformat()}, {DAYS} preceding calendar days; EMP007, EMP013 and EMP018 are positive scenarios; EMP004 is a negative control.")
     else:
@@ -309,9 +313,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Evaluate user-day anomaly rankings")
     parser.add_argument("--cert-dir", type=Path, default=None)
     parser.add_argument("--answers", type=Path, default=None)
+    parser.add_argument("--model", choices=("iforest", "lof"), default="iforest")
     args = parser.parse_args(argv)
     try:
-        print(evaluate(args.cert_dir, args.answers), end="")
+        print(evaluate(args.cert_dir, args.answers, model_name=args.model), end="")
         return 0
     except (ValueError, OSError) as exc:
         print(f"Evaluation failed: {exc}", file=__import__("sys").stderr)
