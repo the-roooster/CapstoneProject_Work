@@ -1,3 +1,4 @@
+import logging
 import shutil
 import tempfile
 import threading
@@ -12,6 +13,7 @@ from app.schemas import JobCreated, JobOut
 router = APIRouter(tags=["jobs"])
 JOBS: dict[str, dict] = {}
 _LOCK = threading.Lock()
+_LOG = logging.getLogger(__name__)
 
 
 def _new_job():
@@ -37,8 +39,9 @@ def _ingest_job(job_id, directory, cleanup, mode="synthetic"):
                 events = load_events_csv(db, Path(directory) / "events.csv")
                 report = {"users": asdict(users), "events": asdict(events)}
         _finish(job_id, "done", report)
-    except Exception as exc:
-        _finish(job_id, "error", {"error": str(exc)})
+    except Exception:
+        _LOG.exception("Ingestion job failed")
+        _finish(job_id, "error", {"error": "Ingestion failed"})
     finally:
         if cleanup:
             shutil.rmtree(directory, ignore_errors=True)
@@ -62,8 +65,9 @@ def _score_job(job_id, retrain):
             explained = explain_all(db)
         _finish(job_id, "done", {"features": len(features), "model_version": version,
                                   "scored": scored, "explained": explained})
-    except Exception as exc:
-        _finish(job_id, "error", {"error": str(exc)})
+    except Exception:
+        _LOG.exception("Scoring job failed")
+        _finish(job_id, "error", {"error": "Scoring failed"})
 
 
 @router.post("/ingest/run", response_model=JobCreated)

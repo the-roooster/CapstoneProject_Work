@@ -10,6 +10,6 @@
 <!-- LOVABLE:END -->
 
 ## Architecture rules
-- Detection pipeline (feature engineering, Isolation Forest, rule-based reasons) lives in pure modules `src/lib/isolation-forest.ts` and `src/lib/scoring.ts` so it is unit-testable; `src/lib/scoring.functions.ts` is the only server entry that runs it and upserts `risk_scores`.
-- Analyst pages live under `src/routes/_authenticated/` and read data client-side through the browser client with RLS (any signed-in analyst can read everything) — single-tenant SOC console.
-- `risk_scores` upserts never send `status`, so analyst triage decisions survive re-scoring.
+- Detection, model calibration, ingestion and rule explanations live in the Python backend.
+- Analyst pages consume the authenticated backend API.
+- Re-scoring preserves investigation status and existing reasons.
