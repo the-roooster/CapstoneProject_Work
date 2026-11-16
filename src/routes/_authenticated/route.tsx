@@ -1,14 +1,14 @@
 import { createFileRoute, Link, Outlet, redirect, useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { LayoutDashboard, Siren, LogOut, ShieldHalf, MapPin, Upload } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { clearToken, getToken, tokenEmail } from "@/lib/api";
 
 export const Route = createFileRoute("/_authenticated")({
   ssr: false,
-  beforeLoad: async () => {
-    const { data } = await supabase.auth.getUser();
-    if (!data.user) throw redirect({ to: "/auth" });
-    return { user: data.user };
+  beforeLoad: () => {
+    const token = getToken();
+    if (!token) throw redirect({ to: "/auth" });
+    return { user: { email: tokenEmail(token) } };
   },
   component: Shell,
 });
@@ -20,7 +20,7 @@ function Shell() {
   async function signOut() {
     await queryClient.cancelQueries();
     queryClient.clear();
-    await supabase.auth.signOut();
+    clearToken();
     navigate({ to: "/auth", replace: true });
   }
   const link = "flex items-center gap-2 rounded-sm px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground";

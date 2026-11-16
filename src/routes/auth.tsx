@@ -1,7 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
-import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
+import { login } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,7 +21,6 @@ export const Route = createFileRoute("/auth")({
 
 function AuthPage() {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -32,17 +30,13 @@ function AuthPage() {
     e.preventDefault();
     setBusy(true);
     setError(null);
-    if (mode === "signin") {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
+    try {
+      await login(email, password);
+      await navigate({ to: "/dashboard" });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Sign in failed");
+    } finally {
       setBusy(false);
-      if (error) return setError(error.message);
-      navigate({ to: "/dashboard" });
-    } else {
-      const { data, error } = await supabase.auth.signUp({ email, password, options: { emailRedirectTo: window.location.origin + "/dashboard" } });
-      setBusy(false);
-      if (error) return setError(error.message);
-      if (data.session) navigate({ to: "/dashboard" });
-      else { toast.success("Check your email to confirm your account."); setMode("signin"); }
     }
   }
 
@@ -50,16 +44,13 @@ function AuthPage() {
     <main className="bg-grid flex min-h-screen items-center justify-center px-4">
       <form onSubmit={submit} className="w-full max-w-sm rounded-md border border-border bg-card p-8">
         <p className="font-mono text-xs uppercase tracking-[0.3em] text-primary">SentinelAI</p>
-        <h1 className="mt-2 text-2xl font-semibold">{mode === "signin" ? "Analyst sign in" : "Create analyst account"}</h1>
+        <h1 className="mt-2 text-2xl font-semibold">Analyst sign in</h1>
         <div className="mt-6 space-y-4">
           <div className="space-y-1.5"><Label htmlFor="email">Email</Label><Input id="email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} /></div>
           <div className="space-y-1.5"><Label htmlFor="password">Password</Label><Input id="password" type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} /></div>
           {error && <p className="text-sm text-destructive">{error}</p>}
-          <Button type="submit" className="w-full" disabled={busy}>{busy ? "Please wait…" : mode === "signin" ? "Sign in" : "Create account"}</Button>
+          <Button type="submit" className="w-full" disabled={busy}>{busy ? "Please wait…" : "Sign in"}</Button>
         </div>
-        <button type="button" onClick={() => setMode(mode === "signin" ? "signup" : "signin")} className="mt-4 w-full text-center text-sm text-muted-foreground hover:text-foreground">
-          {mode === "signin" ? "No account? Create one" : "Have an account? Sign in"}
-        </button>
       </form>
     </main>
   );
