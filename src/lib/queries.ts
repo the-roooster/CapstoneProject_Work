@@ -1,13 +1,8 @@
 import { queryOptions } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import type { Reason } from "./scoring";
+import type { Reason, ScoreRow } from "./types";
+export type { ScoreRow } from "./types";
 import { get } from "./api";
-
-export type ScoreRow = {
-  id: string; employee_id: string; date: string; anomaly_score: number; risk_score: number;
-  risk_level: string; reasons: Reason[]; features: Record<string, number>; status: string;
-  employees?: { full_name: string; department: string; role: string } | null;
-};
 
 async function all<T>(build: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>) {
   const out: T[] = [];
