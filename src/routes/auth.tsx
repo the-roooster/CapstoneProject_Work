@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { login } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -30,10 +30,14 @@ function AuthPage() {
     e.preventDefault();
     setBusy(true);
     setError(null);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    setBusy(false);
-    if (error) return setError(error.message);
-    navigate({ to: "/dashboard" });
+    try {
+      await login(email, password);
+      await navigate({ to: "/dashboard" });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Sign in failed");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
