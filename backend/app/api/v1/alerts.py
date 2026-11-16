@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.api.v1.common import profile
 from app.db import get_db
 from app.explain.actions import suggested_action
+from app.explain.summary import summarize
 from app.features.columns import FEATURE_COLUMNS
 from app.models import Feature, RiskScore, User
 from app.schemas import AlertStatusUpdate
@@ -90,3 +91,25 @@ def update_status(score_id: UUID, body: AlertStatusUpdate, db: Session = Depends
     score.investigation_status = body.status
     db.commit()
     return {"score_id": score.score_id, "investigation_status": score.investigation_status}
+
+
+@router.post("/{score_id}/summary")
+def alert_summary(score_id: UUID, db: Session = Depends(get_db)):
+    score = db.get(RiskScore, score_id)
+    if score is None:
+        raise HTTPException(404, "Alert not found")
+    user = db.get(User, score.user_id)
+    if user is None:
+        raise HTTPException(404, "User not found")
+    feature = db.scalar(select(Feature).where(Feature.user_id == score.user_id, Feature.date == score.date))
+    payload = {
+        "employee": {name: getattr(user, name) for name in (
+            "full_name", "role", "department", "normal_login_start", "normal_login_end",
+            "normal_download_count", "home_location")},
+        "date": score.date.isoformat(), "risk_score": score.risk_score,
+        "risk_level": score.risk_level, "anomaly_score": score.anomaly_score,
+        "reasons": [{"text": reason.get("text", ""), "severity": reason.get("severity")}
+                    for reason in (score.reasons or [])],
+        "features": {name: getattr(feature, name) for name in FEATURE_COLUMNS} if feature else None,
+    }
+    return summarize(payload)
