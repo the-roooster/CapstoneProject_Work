@@ -2,7 +2,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Panel, RiskBadge, StatusBadge } from "@/components/sentinel";
-import { scoresQuery } from "@/lib/queries";
+import { get } from "@/lib/api";
 
 export const Route = createFileRoute("/_authenticated/alerts")({
   head: () => ({
@@ -18,25 +18,49 @@ export const Route = createFileRoute("/_authenticated/alerts")({
   component: Alerts,
 });
 
+type AlertRow = {
+  score_id: string; user_id: string; full_name: string; department: string;
+  risk_score: number; risk_level: string; top_reason: string | null; date: string; investigation_status: string;
+};
+type User = { department: string };
+
 const sel = "h-9 rounded-sm border border-input bg-background px-2 text-sm";
 
 function Alerts() {
-  const { data = [], isLoading } = useQuery(scoresQuery);
   const navigate = useNavigate();
   const [level, setLevel] = useState("all");
   const [dept, setDept] = useState("all");
   const [status, setStatus] = useState("all");
   const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
   const [sort, setSort] = useState<"risk" | "date">("risk");
 
-  const depts = [...new Set(data.map((r) => r.employees?.department).filter(Boolean))] as string[];
-  const rows = data
-    .filter((r) => r.risk_level !== "Low")
-    .filter((r) => level === "all" || r.risk_level === level)
-    .filter((r) => dept === "all" || r.employees?.department === dept)
-    .filter((r) => status === "all" || r.status === status)
-    .filter((r) => !from || r.date >= from)
-    .sort((a, b) => (sort === "risk" ? b.risk_score - a.risk_score : b.date.localeCompare(a.date)));
+  const filters = { level, department: dept, status, from, to, sort };
+  const alerts = useQuery({
+    queryKey: ["alerts", filters],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (level !== "all") params.set("level", level);
+      if (dept !== "all") params.set("department", dept);
+      if (status !== "all") params.set("status", status);
+      if (from) params.set("from", from);
+      if (to) params.set("to", to);
+      params.set("sort", sort);
+      params.set("limit", "1000");
+      const all: AlertRow[] = [];
+      for (let offset = 0; ; offset += 1000) {
+        params.set("offset", String(offset));
+        const page = await get<AlertRow[]>(`/alerts?${params.toString()}`);
+        all.push(...page);
+        if (page.length < 1000) return all;
+      }
+    },
+  });
+  const users = useQuery({ queryKey: ["users", "departments"], queryFn: () => get<User[]>("/users") });
+  const depts = [...new Set((users.data ?? []).map((user) => user.department).filter(Boolean))].sort();
+  const rows = alerts.data ?? [];
+  const error = alerts.error ?? users.error;
+  const filtered = level !== "all" || dept !== "all" || status !== "all" || !!from || !!to;
 
   return (
     <div className="space-y-6">
@@ -44,6 +68,8 @@ function Alerts() {
         <p className="font-mono text-xs uppercase tracking-[0.25em] text-muted-foreground">Triage</p>
         <h1 className="text-2xl font-semibold">Alerts</h1>
       </div>
+      {error && <div role="alert" className="rounded-md border border-destructive bg-card p-4 text-sm text-destructive">{error instanceof Error ? error.message : "Unable to load alerts."}</div>}
+      {(alerts.isLoading || users.isLoading) && <p className="text-sm text-muted-foreground">Loading alerts…</p>}
       <Panel>
         <div className="flex flex-wrap items-center gap-3">
           <select className={sel} value={level} onChange={(e) => setLevel(e.target.value)} aria-label="Risk level">
@@ -56,6 +82,7 @@ function Alerts() {
             <option value="all">Any status</option><option value="open">Open</option><option value="reviewed">Reviewed</option><option value="escalated">Escalated</option><option value="dismissed">Dismissed</option>
           </select>
           <label className="flex items-center gap-2 text-sm text-muted-foreground">From <input type="date" className={sel} value={from} onChange={(e) => setFrom(e.target.value)} /></label>
+          <label className="flex items-center gap-2 text-sm text-muted-foreground">To <input type="date" className={sel} value={to} onChange={(e) => setTo(e.target.value)} /></label>
           <select className={sel} value={sort} onChange={(e) => setSort(e.target.value as "risk" | "date")} aria-label="Sort">
             <option value="risk">Sort: risk</option><option value="date">Sort: newest</option>
           </select>
@@ -69,18 +96,18 @@ function Alerts() {
           </thead>
           <tbody className="divide-y divide-border">
             {rows.map((r) => (
-              <tr key={r.id} className="cursor-pointer hover:bg-accent" onClick={() => navigate({ to: "/alerts/$alertId", params: { alertId: r.id } })}>
+              <tr key={r.score_id} className="cursor-pointer hover:bg-accent" onClick={() => navigate({ to: "/alerts/$alertId", params: { alertId: r.score_id } })}>
                 <td className="px-4 py-3">
-                  <Link to="/alerts/$alertId" params={{ alertId: r.id }} className="font-medium hover:text-primary">{r.employees?.full_name}</Link>
-                  <p className="font-mono text-xs text-muted-foreground">{r.employee_id} · {r.employees?.department}</p>
+                  <Link to="/alerts/$alertId" params={{ alertId: r.score_id }} className="font-medium hover:text-primary">{r.full_name}</Link>
+                  <p className="font-mono text-xs text-muted-foreground">{r.user_id} · {r.department}</p>
                 </td>
                 <td className="px-4"><div className="flex items-center gap-2"><span className="w-8 font-mono">{r.risk_score}</span><RiskBadge level={r.risk_level} /></div></td>
-                <td className="px-4 text-muted-foreground">{r.reasons[0]?.text ?? "Statistical outlier"}</td>
+                <td className="px-4 text-muted-foreground">{r.top_reason ?? "Statistical outlier"}</td>
                 <td className="px-4 font-mono text-xs">{r.date}</td>
-                <td className="px-4"><StatusBadge status={r.status} /></td>
+                <td className="px-4"><StatusBadge status={r.investigation_status} /></td>
               </tr>
             ))}
-            {!isLoading && rows.length === 0 && <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">No alerts match these filters.</td></tr>}
+            {!alerts.isLoading && !alerts.isError && rows.length === 0 && <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">{filtered ? "No alerts match these filters." : "No alerts yet. Run detection."}</td></tr>}
           </tbody>
         </table>
       </div>

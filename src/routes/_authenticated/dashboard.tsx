@@ -1,15 +1,12 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useServerFn } from "@tanstack/react-start";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis, Legend } from "recharts";
 import { Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Panel, RiskBadge, riskColor } from "@/components/sentinel";
-import { scoresQuery, eventTrendQuery } from "@/lib/queries";
-import { runScoring } from "@/lib/scoring.functions";
-import { topRiskyUsers } from "@/lib/top-users";
+import { get, post } from "@/lib/api";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
   head: () => ({
@@ -25,33 +22,47 @@ export const Route = createFileRoute("/_authenticated/dashboard")({
   component: Dashboard,
 });
 
+type DashboardSummary = {
+  open_counts: Record<string, number>;
+  distribution: Record<string, number>;
+  top_users: Array<{ user_id: string; full_name: string; department: string; risk_score: number; risk_level: string }>;
+  total_user_days: number;
+};
+type TrendRow = { date: string; files: number; logins: number; failed: number; usb: number };
+type Job = { status: "running" | "done" | "error"; report: { error?: string; scored?: number } | null };
+
 const tooltipStyle = { background: "var(--popover)", border: "1px solid var(--border)", borderRadius: 4, fontSize: 12 };
 
 function Dashboard() {
   const qc = useQueryClient();
-  const scores = useQuery(scoresQuery);
-  const trend = useQuery(eventTrendQuery);
-  const run = useServerFn(runScoring);
+  const summary = useQuery({ queryKey: ["alerts", "summary"], queryFn: () => get<DashboardSummary>("/alerts/summary") });
+  const trend = useQuery({ queryKey: ["events", "trend"], queryFn: () => get<TrendRow[]>("/events/trend") });
   const [running, setRunning] = useState(false);
 
   async function onRun() {
     setRunning(true);
+    const toastId = toast.loading("Running detection…");
     try {
-      const r = await run();
-      toast.success(`Scored ${r.scored} user-days from ${r.events} events — ${r.high} high, ${r.medium} medium`);
-      qc.invalidateQueries();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Scoring failed");
+      const { job_id } = await post<{ job_id: string }>("/score/run");
+      let job: Job;
+      do {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        job = await get<Job>(`/jobs/${encodeURIComponent(job_id)}`);
+      } while (job.status === "running");
+      if (job.status === "error") throw new Error(job.report?.error || "Scoring failed");
+      await qc.invalidateQueries();
+      toast.success("Detection complete", { id: toastId });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Scoring failed", { id: toastId });
     } finally {
       setRunning(false);
     }
   }
 
-  const rows = scores.data ?? [];
-  const open = rows.filter((r) => r.risk_level !== "Low" && r.status === "open");
-  const count = (l: string) => open.filter((r) => r.risk_level === l).length;
-  const dist = ["Low", "Medium", "High"].map((l) => ({ level: l, count: rows.filter((r) => r.risk_level === l).length }));
-  const topUsers = topRiskyUsers(rows, 6);
+  const counts = summary.data?.open_counts;
+  const dist = ["Low", "Medium", "High"].map((level) => ({ level, count: summary.data?.distribution[level] ?? 0 }));
+  const topUsers = summary.data?.top_users ?? [];
+  const error = summary.error ?? trend.error;
 
   return (
     <div className="space-y-6">
@@ -63,28 +74,28 @@ function Dashboard() {
         <Button onClick={onRun} disabled={running}><Play className="size-4" />{running ? "Running detection…" : "Run detection"}</Button>
       </div>
 
-      {!scores.isLoading && rows.length === 0 && (
-        <Panel>
-          <p className="text-sm text-muted-foreground">No risk scores yet. Click <span className="text-foreground">Run detection</span> to build features, train the Isolation Forest and score every user-day.</p>
-        </Panel>
+      {error && <div role="alert" className="rounded-md border border-destructive bg-card p-4 text-sm text-destructive">{error instanceof Error ? error.message : "Unable to load dashboard."}</div>}
+      {(summary.isLoading || trend.isLoading) && <p className="text-sm text-muted-foreground">Loading dashboard…</p>}
+      {!summary.isLoading && !summary.isError && summary.data?.total_user_days === 0 && (
+        <Panel><p className="text-sm text-muted-foreground">No alerts yet. Run detection.</p></Panel>
       )}
 
       <div className="grid gap-4 sm:grid-cols-4">
-        <Stat label="Open alerts" value={open.length} />
-        <Stat label="High" value={count("High")} tone="text-risk-high" />
-        <Stat label="Medium" value={count("Medium")} tone="text-risk-medium" />
-        <Stat label="User-days scored" value={rows.length} />
+        <Stat label="Open alerts" value={(counts?.High ?? 0) + (counts?.Medium ?? 0)} />
+        <Stat label="High" value={counts?.High ?? 0} tone="text-risk-high" />
+        <Stat label="Medium" value={counts?.Medium ?? 0} tone="text-risk-medium" />
+        <Stat label="User-days scored" value={summary.data?.total_user_days ?? 0} />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Panel title="Top risky users" className="lg:col-span-1" action={<Link to="/alerts" className="text-xs text-primary hover:underline">View all alerts →</Link>}>
           <ul className="divide-y divide-border">
             {topUsers.map((r) => (
-              <li key={r.employee_id}>
-                <Link to="/users/$employeeId" params={{ employeeId: r.employee_id }} className="flex items-center justify-between gap-3 py-2.5 hover:text-primary">
+              <li key={r.user_id}>
+                <Link to="/users/$employeeId" params={{ employeeId: r.user_id }} className="flex items-center justify-between gap-3 py-2.5 hover:text-primary">
                   <div>
-                    <p className="text-sm font-medium">{r.employees?.full_name}</p>
-                    <p className="font-mono text-xs text-muted-foreground">{r.employee_id} · {r.employees?.department}</p>
+                    <p className="text-sm font-medium">{r.full_name}</p>
+                    <p className="font-mono text-xs text-muted-foreground">{r.user_id} · {r.department}</p>
                   </div>
                   <div className="flex items-center gap-3">
                     <span className="font-mono text-lg">{r.risk_score}</span>
@@ -93,7 +104,7 @@ function Dashboard() {
                 </Link>
               </li>
             ))}
-            {topUsers.length === 0 && <li className="py-2 text-sm text-muted-foreground">Nothing yet.</li>}
+            {!summary.isLoading && !summary.isError && topUsers.length === 0 && <li className="py-2 text-sm text-muted-foreground">No alerts yet. Run detection.</li>}
           </ul>
         </Panel>
 
