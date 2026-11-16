@@ -4,11 +4,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Panel, RiskBadge, StatusBadge } from "@/components/sentinel";
 import { alertQuery, eventsByIdsQuery } from "@/lib/queries";
-import { suggestedAction } from "@/lib/scoring";
-import { supabase } from "@/integrations/supabase/client";
+import { get, patch, post } from "@/lib/api";
 import { useState } from "react";
-import { useServerFn } from "@tanstack/react-start";
-import { summarizeAlert } from "@/lib/summary.functions";
 
 export const Route = createFileRoute("/_authenticated/alerts_/$alertId")({
   head: () => ({
@@ -30,27 +27,30 @@ function AlertDetail() {
   const { data: a, isLoading, error } = useQuery(alertQuery(alertId));
   const ids = [...new Set((a?.reasons ?? []).flatMap((r) => r.event_ids))];
   const events = useQuery({ ...eventsByIdsQuery(ids), enabled: !!a });
+  const user = useQuery({ queryKey: ["user-profile", a?.user_id], queryFn: () => get<{ role: string }>(`/users/${encodeURIComponent(a!.user_id)}`), enabled: !!a });
 
   async function setStatus(status: string) {
-    const { error } = await supabase.from("risk_scores").update({ status }).eq("id", alertId);
-    if (error) { toast.error(error.message); return; }
-    toast.success(`Alert marked ${status}`);
-    qc.invalidateQueries();
+    try {
+      await patch(`/alerts/${encodeURIComponent(alertId)}/status`, { status });
+      toast.success(`Alert marked ${status}`);
+      await qc.invalidateQueries();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Status update failed");
+    }
   }
 
-  const summarize = useServerFn(summarizeAlert);
   const [summary, setSummary] = useState<string | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   async function runSummary() {
     setAiBusy(true);
-    try { setSummary((await summarize({ data: { id: alertId } })).summary); }
+    try { setSummary((await post<{ summary: string; source: "llm" | "template" }>(`/alerts/${encodeURIComponent(alertId)}/summary`)).summary); }
     catch (e) { toast.error(e instanceof Error ? e.message : "Summary failed"); }
     finally { setAiBusy(false); }
   }
 
   if (isLoading) return <p className="text-muted-foreground">Loading…</p>;
   if (error || !a) return <p className="text-destructive">Alert not found.</p>;
-  const emp = a.employees;
+
 
   return (
     <div className="space-y-6">
@@ -58,13 +58,13 @@ function AlertDetail() {
         <div>
           <Link to="/alerts" className="font-mono text-xs uppercase tracking-[0.25em] text-muted-foreground hover:text-primary">← Alerts</Link>
           <h1 className="mt-1 text-2xl font-semibold">
-            <Link to="/users/$employeeId" params={{ employeeId: a.employee_id }} className="hover:text-primary">{emp.full_name as string}</Link>
+            <Link to="/users/$employeeId" params={{ employeeId: a.user_id }} className="hover:text-primary">{a.full_name}</Link>
             <span className="ml-3 font-mono text-base text-muted-foreground">{a.date}</span>
           </h1>
-          <p className="text-sm text-muted-foreground">{emp.role as string} · {emp.department as string} · {a.employee_id}</p>
+          <p className="text-sm text-muted-foreground">{user.data?.role ?? "—"} · {a.department} · {a.user_id}</p>
         </div>
         <div className="flex items-center gap-2">
-          <StatusBadge status={a.status} />
+          <StatusBadge status={a.investigation_status} />
           <Button variant="secondary" size="sm" onClick={() => setStatus("reviewed")}>Mark reviewed</Button>
           <Button size="sm" onClick={() => setStatus("escalated")}>Escalate</Button>
           <Button variant="ghost" size="sm" onClick={() => setStatus("dismissed")}>Dismiss</Button>
@@ -81,7 +81,7 @@ function AlertDetail() {
           <p className="mt-4 font-mono text-xs text-muted-foreground">Isolation Forest anomaly score: {a.anomaly_score.toFixed(3)}</p>
           <div className="mt-4 rounded-sm border border-border bg-secondary p-3 text-sm">
             <p className="font-mono text-xs uppercase tracking-wider text-primary">Suggested action</p>
-            <p className="mt-1">{suggestedAction(a.risk_level)}</p>
+            <p className="mt-1">{a.suggested_action}</p>
           </div>
         </Panel>
 
@@ -104,7 +104,7 @@ function AlertDetail() {
           <details className="mt-4">
             <summary className="cursor-pointer font-mono text-xs uppercase tracking-wider text-muted-foreground">Feature vector</summary>
             <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 font-mono text-xs sm:grid-cols-3">
-              {Object.entries(a.features).map(([k, v]) => <div key={k} className="flex justify-between"><span className="text-muted-foreground">{k}</span><span>{Number(v).toFixed(Number.isInteger(v) ? 0 : 1)}</span></div>)}
+              {Object.entries(a.features ?? {}).map(([k, v]) => <div key={k} className="flex justify-between"><span className="text-muted-foreground">{k}</span><span>{Number(v).toFixed(Number.isInteger(v) ? 0 : 1)}</span></div>)}
             </div>
           </details>
         </Panel>
@@ -115,13 +115,15 @@ function AlertDetail() {
         <Button size="sm" variant="secondary" className="mt-3" disabled={aiBusy} onClick={runSummary}>{aiBusy ? "Writing…" : summary ? "Regenerate" : "Generate summary"}</Button>
       </Panel>
 
+      {events.isError && <p role="alert" className="text-destructive">{events.error instanceof Error ? events.error.message : "Unable to load events."}</p>}
+      {user.isError && <p role="alert" className="text-destructive">{user.error instanceof Error ? user.error.message : "Unable to load user profile."}</p>}
       <Panel title={`Related raw events (${events.data?.length ?? 0})`}>
         <div className="max-h-96 overflow-auto">
           <table className="w-full font-mono text-xs">
             <thead className="sticky top-0 bg-card text-left text-muted-foreground"><tr><th className="py-1.5">Time (UTC)</th><th>Activity</th><th>Device</th><th>IP</th><th>Location</th><th>Detail</th></tr></thead>
             <tbody className="divide-y divide-border">
               {(events.data ?? []).map((e) => (
-                <tr key={e.id}><td className="py-1.5">{e.ts.slice(0, 19).replace("T", " ")}</td><td>{e.activity}</td><td>{e.device}</td><td>{e.ip}</td><td>{e.location}</td><td className="text-muted-foreground">{String((e.metadata as Record<string, unknown>)?.["file"] ?? (e.metadata as Record<string, unknown>)?.["serial"] ?? "")}</td></tr>
+                <tr key={e.event_id}><td className="py-1.5">{e.timestamp.slice(0, 19).replace("T", " ")}</td><td>{e.activity}</td><td>{e.device}</td><td>{e.ip}</td><td>{e.location}</td><td className="text-muted-foreground">{String((e.metadata as Record<string, unknown>)?.["file"] ?? (e.metadata as Record<string, unknown>)?.["serial"] ?? "")}</td></tr>
               ))}
             </tbody>
           </table>

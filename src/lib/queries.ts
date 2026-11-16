@@ -1,6 +1,7 @@
 import { queryOptions } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import type { Reason } from "./scoring";
+import { get } from "./api";
 
 export type ScoreRow = {
   id: string; employee_id: string; date: string; anomaly_score: number; risk_score: number;
@@ -54,43 +55,52 @@ export const eventTrendQuery = queryOptions({
   },
 });
 
+export type ApiEvent = {
+  event_id: number; user_id: string; timestamp: string; activity_type: string; activity: string;
+  device: string; ip: string; location: string; metadata: Record<string, unknown>;
+};
+
+export type AlertDetail = {
+  score_id: string; user_id: string; full_name: string; department: string; date: string;
+  risk_score: number; risk_level: string; anomaly_score: number; reasons: Reason[];
+  features: Record<string, number> | null; investigation_status: string; suggested_action: string;
+};
+
+export type UserDetail = {
+  user_id: string; full_name: string; department: string; role: string;
+  baseline: { normal_login_start: number; normal_login_end: number; normal_download_count: number; home_location: string; primary_device: string };
+  risk_history: Array<{ date: string; risk_score: number; risk_level: string }>;
+  recent_anomalies: Array<{ score_id: string; date: string; risk_score: number; risk_level: string }>;
+  devices: string[];
+};
+
 export const alertQuery = (id: string) =>
   queryOptions({
     queryKey: ["alert", id],
-    queryFn: async () => {
-      const { data, error } = await supabase.from("risk_scores").select("*, employees(*)").eq("id", id).single();
-      if (error) throw new Error(error.message);
-      return data as unknown as ScoreRow & { employees: Record<string, string | number> };
-    },
+    queryFn: () => get<AlertDetail>(`/alerts/${encodeURIComponent(id)}`),
   });
 
 export const eventsByIdsQuery = (ids: number[]) =>
   queryOptions({
     queryKey: ["events-ids", ids.slice(0, 300).join(",")],
-    queryFn: async () => {
-      if (!ids.length) return [];
-      const { data, error } = await supabase.from("events").select("*").in("id", ids.slice(0, 300)).order("ts");
-      if (error) throw new Error(error.message);
-      return data;
-    },
+    queryFn: () => ids.length
+      ? get<ApiEvent[]>(`/events/by-ids?ids=${ids.slice(0, 300).join(",")}`)
+      : Promise.resolve([] as ApiEvent[]),
   });
 
 export const employeeDetailQuery = (id: string) =>
   queryOptions({
     queryKey: ["employee", id],
     queryFn: async () => {
-      const [emp, scores, events] = await Promise.all([
-        supabase.from("employees").select("*").eq("id", id).single(),
-        supabase.from("risk_scores").select("*").eq("employee_id", id).order("date"),
-        supabase.from("events").select("*").eq("employee_id", id).order("ts", { ascending: false }).limit(50),
+      const [employee, events] = await Promise.all([
+        get<UserDetail>(`/users/${encodeURIComponent(id)}`),
+        get<ApiEvent[]>(`/events?user_id=${encodeURIComponent(id)}&limit=50`),
       ]);
-      if (emp.error) throw new Error(emp.error.message);
-      const devices = await supabase.from("events").select("device").eq("employee_id", id).limit(1000);
-      return {
-        employee: emp.data,
-        scores: (scores.data ?? []) as unknown as ScoreRow[],
-        events: events.data ?? [],
-        devices: [...new Set((devices.data ?? []).map((d) => d.device))],
-      };
+      return { employee, events };
     },
   });
+
+export const metaQuery = queryOptions({
+  queryKey: ["meta"],
+  queryFn: () => get<{ scale: { medium: number; high: number } }>("/meta"),
+});
